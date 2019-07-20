@@ -858,10 +858,11 @@ _color_lerp(pgColorObject *self, PyObject *args, PyObject *kw)
     Uint8 new_rgba[4];
     PyObject* colobj;
     double amt;
-    static char *keywords[] = {"color", "amount", NULL};
+    double gamma = 1.0;
+    static char *keywords[] = {"color", "amount", "gamma", NULL};
 
-    if (!PyArg_ParseTupleAndKeywords(args, kw, "Od", keywords,
-                                     &colobj, &amt)) {
+    if (!PyArg_ParseTupleAndKeywords(args, kw, "Od|d", keywords,
+                                     &colobj, &amt, &gamma)) {
         return NULL;
     }
 
@@ -872,13 +873,17 @@ _color_lerp(pgColorObject *self, PyObject *args, PyObject *kw)
 
     if (amt < 0 || amt > 1) {
         return RAISE(PyExc_ValueError,
-                        "Argument 2 must be in range [0, 1]");
+                        "Argument 2 (blend amount) must be in range [0, 1]");
+    }
+    if (gamma < 1 || gamma > 20) {
+        return RAISE(PyExc_ValueError,
+                        "Argument 3 (gamma correction) must be in range [1, 20]");
     }
 
-    new_rgba[0] = (Uint8)pg_round(self->data[0] * (1 - amt) + rgba[0] * amt);
-    new_rgba[1] = (Uint8)pg_round(self->data[1] * (1 - amt) + rgba[1] * amt);
-    new_rgba[2] = (Uint8)pg_round(self->data[2] * (1 - amt) + rgba[2] * amt);
-    new_rgba[3] = (Uint8)pg_round(self->data[3] * (1 - amt) + rgba[3] * amt);
+    new_rgba[0] = (Uint8)pg_round(pow(pow(self->data[0], gamma) * (1 - amt) + pow(rgba[0], gamma) * amt, 1.0/gamma));
+    new_rgba[1] = (Uint8)pg_round(pow(pow(self->data[1], gamma) * (1 - amt) + pow(rgba[1], gamma) * amt, 1.0/gamma));
+    new_rgba[2] = (Uint8)pg_round(pow(pow(self->data[2], gamma) * (1 - amt) + pow(rgba[2], gamma) * amt, 1.0/gamma));
+    new_rgba[3] = (Uint8)pg_round(pow(pow(self->data[3], gamma) * (1 - amt) + pow(rgba[3], gamma) * amt, 1.0/gamma));
 
     return (PyObject *)_color_new_internal(Py_TYPE(self), new_rgba);
 }
