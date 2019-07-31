@@ -329,15 +329,16 @@ try:
 except (ImportError, IOError):
     scrap = MissingModule("scrap", urgent=0)
 
-try:
-    import pygame.surfarray
-except (ImportError, IOError):
-    surfarray = MissingModule("surfarray", urgent=0)
+if not "PYGAME_EXPLICIT_NUMPY" in os.environ or "numpy" in sys.modules:
+    try:
+        import pygame.surfarray
+    except (ImportError, IOError):
+        surfarray = MissingModule("surfarray", urgent=0)
 
-try:
-    import pygame.sndarray
-except (ImportError, IOError):
-    sndarray = MissingModule("sndarray", urgent=0)
+    try:
+        import pygame.sndarray
+    except (ImportError, IOError):
+        sndarray = MissingModule("sndarray", urgent=0)
 
 try:
     import pygame.fastevent
