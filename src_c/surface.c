@@ -142,6 +142,8 @@ surf_get_clip(PyObject *self, PyObject *args);
 static PyObject *
 surf_blit(PyObject *self, PyObject *args, PyObject *keywds);
 static PyObject *
+surf_tilemap_blit(PyObject *self, PyObject *args);
+static PyObject *
 surf_blits(PyObject *self, PyObject *args, PyObject *keywds);
 static PyObject *
 surf_fill(PyObject *self, PyObject *args, PyObject *keywds);
@@ -311,6 +313,8 @@ static struct PyMethodDef surface_methods[] = {
      DOC_SURFACEFILL},
     {"blit", (PyCFunction)surf_blit, METH_VARARGS | METH_KEYWORDS,
      DOC_SURFACEBLIT},
+    {"tilemap_blit", (PyCFunction)surf_tilemap_blit, METH_VARARGS,
+     "bit tilemap"},
     {"blits", (PyCFunction)surf_blits, METH_VARARGS | METH_KEYWORDS,
      DOC_SURFACEBLITS},
 
@@ -2170,6 +2174,149 @@ surf_blit(PyObject *self, PyObject *args, PyObject *keywds)
     if (result != 0)
         return NULL;
 
+    return pgRect_New(&dest_rect);
+}
+
+static PyObject *
+surf_tilemap_blit(PyObject *self, PyObject *args)
+{
+    SDL_Surface *tilesheet, *dest = pgSurface_AsSurface(self);
+    Py_buffer tilemap;
+    GAME_Rect *src_rect, *dest_rect, temp1, temp2;
+
+    PyObject *tilemap_arg, *tilesheet_arg, *src_arg, *dest_arg =NULL;
+    SDL_Rect sdldest_rect, sdlsrc_rect, tile_rect, tile_src_rect;
+    unsigned int tile_left, tile_top,
+        tile_right, tile_bottom,
+        tile_size,
+        tile_x, tile_y,
+        tilemap_w, tilemap_h,
+        sheet_w, sheet_h,
+        map_w,
+        tile_index;
+    int result;
+    size_t off;
+    char *tiles;
+
+    if (!PyArg_ParseTuple(args, "OO!OOII",
+                          &tilemap_arg,
+                          &pgSurface_Type,
+                          &tilesheet_arg,
+                          &dest_arg,
+                          &src_arg,
+                          &tile_size,
+                          &map_w))
+        return NULL;
+
+    tilesheet = pgSurface_AsSurface(tilesheet_arg);
+    if(tilesheet==NULL){
+        return RAISE(PyExc_TypeError, "invalid tilesheet argument");
+    }
+
+    if (PyObject_GetBuffer(tilemap_arg, &tilemap, PyBUF_SIMPLE) != 0){
+        return RAISE(PyExc_TypeError, "invalid tilemap argument");
+    }
+    tiles=tilemap.buf;
+
+    if (!dest || !tilesheet)
+        return RAISE(pgExc_SDLError, "display Surface quit");
+
+#if IS_SDLv1
+    if (dest->flags & SDL_OPENGL &&
+        !(dest->flags & (SDL_OPENGLBLIT & ~SDL_OPENGL)))
+        return RAISE(pgExc_SDLError,
+                     "Cannot blit to OPENGL Surfaces (OPENGLBLIT is ok)");
+#endif /* IS_SDLv1 */
+
+    if (!(src_rect = pgRect_FromObject(src_arg, &temp1))) {
+        return RAISE(PyExc_TypeError, "invalid source position for blit");
+    }
+
+    if (!(dest_rect = pgRect_FromObject(dest_arg, &temp2))) {
+        return RAISE(PyExc_TypeError, "invalid target position for blit");
+    }
+
+    if (dest_rect->w != src_rect->w || dest_rect->h != src_rect->h){
+        return RAISE(PyExc_ValueError, "source and target sizes donot match");
+    }
+
+    sdldest_rect.x = (short)dest_rect->x;
+    sdldest_rect.y = (short)dest_rect->y;
+    sdldest_rect.w = (unsigned short)src_rect->w;
+    sdldest_rect.h = (unsigned short)src_rect->h;
+
+    sdlsrc_rect.x = (short)src_rect->x;
+    sdlsrc_rect.y = (short)src_rect->y;
+    sdlsrc_rect.w = (unsigned short)src_rect->w;
+    sdlsrc_rect.h = (unsigned short)src_rect->h;
+
+    if (((pgSurfaceObject *)self)->subsurface) {
+        return RAISE(PyExc_ValueError, "subsurface targets are not supported");
+    }
+    if (dest->pixels == tilesheet->pixels) {
+        return RAISE(PyExc_ValueError, "self-blits are not supported");
+    }
+    if (dest->format->BytesPerPixel == 1) {
+        return RAISE(PyExc_ValueError, "tilesheet blit to 8-bit surface not supported");
+    }
+
+    pgSurface_Prep(self);
+
+    sheet_w=tilesheet->w/tile_size;
+    sheet_h=tilesheet->h/tile_size;
+
+
+    tile_rect=sdldest_rect;
+    tile_rect.w= tile_size;
+    tile_rect.h= tile_size;
+    tile_src_rect=tile_rect;
+
+    tile_left=sdlsrc_rect.x/tile_size;
+    tile_right=(sdlsrc_rect.x+sdlsrc_rect.w-1)/tile_size;
+
+    tile_top=sdlsrc_rect.y/tile_size;
+    tile_bottom=(sdlsrc_rect.y+sdlsrc_rect.h-1)/tile_size;
+
+    //printf("x:%i, y:%i, w:%i, h:%i\, sw:%i, sh:%i\n", tile_left, tile_top, tile_right, tile_bottom, sheet_w, sheet_h);
+
+    //printf("buf:%#010x, len:%i\n", tilemap.buf, tilemap.len);
+
+    result=0;
+    for (tile_y=tile_top; tile_y<=tile_bottom; tile_y++){
+
+        for (tile_x=tile_left; tile_x<=tile_right; tile_x++){
+            off = tile_x+tile_y*map_w;
+            //            printf("%3i",off);
+            tile_index=tiles[off];
+            //printf("%i", tile_index);
+
+            if(tile_index!=0){
+
+                tile_src_rect.x = tile_size*(tile_index % sheet_w);
+                tile_src_rect.y = tile_size*(tile_index / sheet_w);
+
+                tile_rect.x = sdldest_rect.x+tile_size*tile_x;
+                tile_rect.y = sdldest_rect.y+tile_size*tile_y;
+
+
+                result= SDL_BlitSurface(tilesheet, &tile_src_rect, dest, &tile_rect);
+
+
+                if (result != 0){
+                    goto cleanup;
+                }
+            }
+        }
+        //printf("|\n");
+    }
+    //printf("-------\n\n");
+
+
+ cleanup:
+    PyBuffer_Release(&tilemap);
+    pgSurface_Unprep(self);
+    if (result != 0)
+        return NULL;
     return pgRect_New(&dest_rect);
 }
 
