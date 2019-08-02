@@ -421,6 +421,102 @@ rotate(SDL_Surface *src, SDL_Surface *dst, Uint32 bgcolor, double sangle,
 }
 
 static void
+mode7(SDL_Surface *src, SDL_Surface *dst, SDL_Rect dstrect,
+      Uint32 bgcolor, Uint32 flags,
+      double a,   double b, double x0,
+      double c,   double d, double y0,
+      double zx, double zy)
+{
+    int x, y, dx, dy, x1, y1;
+    int FLAG_CLAMP=1;
+    int FLAG_WRAP=2;
+    int FLAG_FILL=4;
+    int bpp=dst->format->BytesPerPixel;
+
+    Uint8 *srcpix = (Uint8 *)src->pixels;
+    Uint8 *dstpix = (Uint8 *)dst->pixels;
+    int srcpitch = src->pitch;
+    int dstpitch = dst->pitch;
+    Uint8 *srcpos;
+    int out_of_bounds;
+
+    double z1;
+    for (y=dstrect.y; y<dstrect.y+dstrect.h; y++) {
+        for (x=dstrect.x; x<dstrect.x+dstrect.w; x++) {
+            dx = x-x0-dstrect.x;
+            dy = y-y0-dstrect.y;
+            x1 = dx*a  + dy*b; //x0*z
+            y1 = dx*c  + dy*d; //y0*z
+            z1 = dx*zx + dy*zy + 1.0; //z0*z
+            x1/=z1;
+            y1/=z1;
+            x1+=x0;
+            y1+=y0;
+
+            out_of_bounds = x1<0||y1<0||x1>=src->w||y1>=src->h;
+
+            if(out_of_bounds){
+                //printf("OOB (%i, %i) -> (%i, %i)\n", x, y, x1, y1);
+                if(flags==0)
+                    continue;
+                if(flags & FLAG_CLAMP){
+                    if (x1<0)
+                        x1=0;
+                    if (y1<0)
+                        y1=0;
+                    if (x1>=src->w)
+                        x1=src->w-1;
+                    if (y1>=src->h)
+                        y1=src->h-1;
+                } else if(flags & FLAG_WRAP) {
+                    x1= (x1 % src->w + src->w) % src->w;
+                    y1= (y1 % src->h + src->h) % src->h;
+                }
+            } else {
+                //printf("IN (%i, %i) -> (%i, %i)\n", x, y, x1, y1);
+            }
+
+            switch (bpp) {
+            case 1:
+                {
+                    Uint8 *dstpos =dstpix+  y*dstpitch  +x*bpp;
+                    Uint8 *srcpos =srcpix+ y1*srcpitch +x1*bpp;
+                    if(out_of_bounds && (flags & FLAG_FILL)){
+                        *dstpos = bgcolor;
+                    } else {
+                        *dstpos = *srcpos;
+                    }
+                       break;
+                }
+            case 2:
+                {
+                    Uint16 *dstpos =dstpix+  y*dstpitch  +x*bpp;
+                    Uint16 *srcpos =srcpix+ y1*srcpitch +x1*bpp;
+                    if(out_of_bounds && (flags & FLAG_FILL)){
+                        *dstpos = bgcolor;
+                    } else {
+                        *dstpos = *srcpos;
+                    }
+                       break;
+                }
+            case 4:
+                {
+                    Uint32 *dstpos =dstpix+  y*dstpitch  +x*bpp;
+                    Uint32 *srcpos =srcpix+ y1*srcpitch +x1*bpp;
+                     if(out_of_bounds && (flags & FLAG_FILL)){
+                           *dstpos = bgcolor;
+                    } else {
+                        *dstpos = *srcpos;
+                    }
+                    break;
+                }
+            }
+        }
+    }
+}
+
+
+static void
 stretch(SDL_Surface *src, SDL_Surface *dst)
 {
     int looph, loopw;
@@ -640,6 +736,58 @@ surf_scale2x(PyObject *self, PyObject *arg)
     else
         return pgSurface_New(newsurf);
 }
+
+static PyObject *
+surf_mode7(PyObject *self, PyObject *arg)
+{
+    PyObject *surfobj, *surfobj2, *rectobj;
+    SDL_Surface *src;
+    SDL_Surface *dst;
+    SDL_Rect sdlrect;
+    Uint32 bgcolor;
+    Uint32 flags;
+    double a, b, c, d, x0, y0, z1, z2;
+    GAME_Rect *rect, temp;
+
+
+    int width, height;
+
+    /*get all the arguments*/
+    if (!PyArg_ParseTuple(arg, "O!O!O(dddddd)(dd)II", &pgSurface_Type, &surfobj,
+                          &pgSurface_Type, &surfobj2, &rectobj,
+                          &a, &b, &c, &d, &z1, &z2, &x0, &y0, &bgcolor, &flags))
+        return NULL;
+
+    if (!(rect = pgRect_FromObject(rectobj, &temp)))
+        return RAISE(PyExc_TypeError, "Rect argument is invalid");
+
+    sdlrect.x = rect->x;
+    sdlrect.y = rect->y;
+    sdlrect.h = rect->h;
+    sdlrect.w = rect->w;
+
+    dst = pgSurface_AsSurface(surfobj);
+    src = pgSurface_AsSurface(surfobj2);
+
+    /* check to see if the format of the surface is the same. */
+    if (dst->format->BytesPerPixel != src->format->BytesPerPixel)
+        return RAISE(PyExc_ValueError,
+                     "Source and destination surfaces need the same format.");
+
+    SDL_LockSurface(dst);
+    SDL_LockSurface(src);
+
+    Py_BEGIN_ALLOW_THREADS;
+    mode7(src, dst, sdlrect, bgcolor, flags, a, b, x0, c, d, y0, z1, z2);
+    Py_END_ALLOW_THREADS;
+
+    SDL_UnlockSurface(src);
+    SDL_UnlockSurface(dst);
+
+    Py_INCREF(surfobj);
+    return surfobj;
+    }
+
 
 static PyObject *
 surf_rotate(PyObject *self, PyObject *arg)
@@ -2737,6 +2885,7 @@ surf_average_color(PyObject *self, PyObject *arg)
 static PyMethodDef _transform_methods[] = {
     {"scale", surf_scale, METH_VARARGS, DOC_PYGAMETRANSFORMSCALE},
     {"rotate", surf_rotate, METH_VARARGS, DOC_PYGAMETRANSFORMROTATE},
+    {"mode7", surf_mode7, METH_VARARGS, "mode7(dest, source, rect, mat, p0, bgcolor, flags)"},
     {"flip", surf_flip, METH_VARARGS, DOC_PYGAMETRANSFORMFLIP},
     {"rotozoom", surf_rotozoom, METH_VARARGS, DOC_PYGAMETRANSFORMROTOZOOM},
     {"chop", surf_chop, METH_VARARGS, DOC_PYGAMETRANSFORMCHOP},
