@@ -1433,6 +1433,7 @@ static PyObject *
 pg_event_get(PyObject *self, PyObject *args, PyObject *kwargs)
 {
     SDL_Event event;
+    SDL_Event resize_event;
     Py_ssize_t num;
     int loop;
     PyObject *type = NULL, *list;
@@ -1466,7 +1467,14 @@ pg_event_get(PyObject *self, PyObject *args, PyObject *kwargs)
     if (type == NULL || type == Py_None) {
         while (SDL_PeepEvents(&event, 1, SDL_GETEVENT,
                               SDL_FIRSTEVENT, SDL_LASTEVENT) == 1) {
-            if(!_pg_event_append_to_list(list, &event))
+            if (event.type == SDL_VIDEORESIZE) {
+                resize_event=event;
+            }
+            else if(!_pg_event_append_to_list(list, &event))
+                return NULL;
+        }
+        if (resize_event.type == SDL_VIDEORESIZE){
+            if(!_pg_event_append_to_list(list, &resize_event))
                 return NULL;
         }
         return list;
