@@ -234,6 +234,12 @@ static SDL_Surface *
 pg_DisplayFormatAlpha(SDL_Surface *surface);
 static SDL_Surface *
 pg_DisplayFormat(SDL_Surface *surface);
+static SDL_Surface *
+pg_get_surf_root(pgSurfaceObject *surf);
+static PyObject *
+surf_enter(PyObject *self, PyObject *args);
+static PyObject *
+surf_exit(PyObject *self, PyObject *args);
 #endif /* IS_SDLv2 */
 
 #if IS_SDLv2 && !SDL_VERSION_ATLEAST(2, 0, 10)
@@ -305,6 +311,11 @@ static struct PyMethodDef surface_methods[] = {
 #if IS_SDLv2
     {"get_blendmode", surf_get_blendmode, METH_NOARGS,
      "Return the surface's SDL 2 blend mode"},
+    {"__enter__", surf_enter, METH_NOARGS,
+     "locking context manager"},
+    {"__exit__", surf_exit, METH_VARARGS,
+     "locking context manager"},
+
 #endif /* IS_SDLv2 */
 
     {"copy", surf_copy, METH_NOARGS, DOC_SURFACECOPY},
@@ -1126,6 +1137,8 @@ surf_unmap_rgb(PyObject *self, PyObject *arg)
     return pgColor_New(rgba);
 }
 
+#if IS_SDLv1
+
 static PyObject *
 surf_lock(PyObject *self, PyObject *args)
 {
@@ -1180,6 +1193,98 @@ surf_get_locks(PyObject *self, PyObject *args)
     }
     return tuple;
 }
+
+#else  /* IS_SDLv2 */
+
+static SDL_Surface *
+pg_get_surf_root(pgSurfaceObject *surf)
+{
+    while (surf->subsurface!=NULL) {
+        surf = surf->subsurface->owner;
+    }
+
+    return pgSurface_AsSurface(surf);
+}
+
+static PyObject *
+surf_lock(PyObject *self, PyObject *args)
+{
+    SDL_Surface *sdl_surf = pg_get_surf_root((pgSurfaceObject *) self);
+    PyErr_WarnEx(PyExc_DeprecationWarning, "Manually locking without a context manager", 1);
+
+    if (SDL_LockSurface(sdl_surf) != 0)
+        return RAISE(pgExc_SDLError, SDL_GetError() );
+
+    Py_RETURN_NONE;
+}
+
+static PyObject *
+surf_unlock(PyObject *self, PyObject *args)
+{
+    //SDL_Surface *sdl_surf = pg_get_surf_root((pgSurfaceObject *) self);
+    pgSurfaceObject *root = surf_get_abs_parent(self, args);
+    PyErr_WarnEx(PyExc_DeprecationWarning, "Manually un-locking without a context manager", 1);
+    SDL_UnlockSurface(root->surf);
+
+    //SDL_UnlockSurface(sdl_surf);
+    Py_RETURN_NONE;
+}
+
+static PyObject *
+surf_mustlock(PyObject *self, PyObject *args)
+{
+    SDL_Surface *sdl_surf = pg_get_surf_root((pgSurfaceObject *) self);
+    PyErr_WarnEx(PyExc_DeprecationWarning, "Manually un-locking without a context manager", 1);
+
+    return PyInt_FromLong(SDL_MUSTLOCK(sdl_surf));
+}
+
+static PyObject *
+surf_get_locked(PyObject *self, PyObject *args)
+{
+    SDL_Surface *surf = pgSurface_AsSurface(self);
+    if (surf->locked > 0)
+        Py_RETURN_TRUE;
+
+    SDL_Surface *sdl_surf = pg_get_surf_root((pgSurfaceObject *) self);
+    if (sdl_surf->locked > 0)
+        Py_RETURN_TRUE;
+
+    /* if (py_surf->locklist && PyList_Size(py_surf->locklist) > 0) */
+    /*     Py_RETURN_TRUE; */
+
+    Py_RETURN_FALSE;
+
+}
+
+static PyObject *
+surf_enter(PyObject *self, PyObject *args)
+{
+    SDL_Surface *sdl_surf = pg_get_surf_root((pgSurfaceObject *) self);
+    if (SDL_LockSurface(sdl_surf) != 0)
+        return RAISE(pgExc_SDLError, SDL_GetError());
+    Py_RETURN_NONE;
+}
+
+static PyObject *
+surf_exit(PyObject *self, PyObject *args)
+{
+    SDL_Surface *sdl_surf = pg_get_surf_root((pgSurfaceObject *) self);
+
+    SDL_UnlockSurface(sdl_surf);
+
+    Py_RETURN_FALSE;
+}
+
+static PyObject *
+surf_get_locks(PyObject *self, PyObject *args)
+{
+    SDL_Surface *sdl_surf = pg_get_surf_root((pgSurfaceObject *) self);
+    return RAISE(pgExc_SDLError,"WAT DO WE EVEN NEED THIS FOR?");
+}
+
+#endif /* IS_SDLv2 */
+
 
 static PyObject *
 surf_get_palette(PyObject *self, PyObject *args)
@@ -2149,7 +2254,9 @@ surf_fill(PyObject *self, PyObject *args, PyObject *keywds)
         }
         else {
             pgSurface_Prep(self);
+            pgSurface_Lock(self);
             result = SDL_FillRect(surf, &sdlrect, color);
+            pgSurface_Unlock(self);
             pgSurface_Unprep(self);
         }
         if (result == -1)
@@ -3959,10 +4066,9 @@ pgSurface_Blit(PyObject *dstobj, PyObject *srcobj, SDL_Rect *dstrect,
         dst = subsurface;
     }
     else {
-        pgSurface_Prep(dstobj);
         subsurface = NULL;
     }
-
+    pgSurface_Prep(dstobj);
     pgSurface_Prep(srcobj);
 
 #if IS_SDLv1
@@ -4094,8 +4200,8 @@ pgSurface_Blit(PyObject *dstobj, PyObject *srcobj, SDL_Rect *dstrect,
         dstrect->x -= suboffsetx;
         dstrect->y -= suboffsety;
     }
-    else
-        pgSurface_Unprep(dstobj);
+
+    pgSurface_Unprep(dstobj);
     pgSurface_Unprep(srcobj);
 
     if (result == -1)

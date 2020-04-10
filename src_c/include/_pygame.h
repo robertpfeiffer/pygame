@@ -356,7 +356,7 @@ struct SDL_Surface;
 typedef struct {
     PyObject_HEAD struct SDL_Surface *surf;
 #if PG_API_VERSION == 2
-    int owner;
+    unsigned long int owner;
 #endif /* PG_API_VERSION == 2 */
     struct pgSubSurface_Data *subsurface; /* ptr to subsurface data (if a
                                            * subsurface)*/
