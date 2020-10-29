@@ -130,10 +130,6 @@ pgEvent_AutoInit(PyObject *self, PyObject *args)
         _pg_event_is_init = 1;
     }
 
-#if IS_SDLv2
-    SDL_SetEventFilter(pg_event_filter, NULL);
-#endif /* IS_SDLv2 */
-
     return PyInt_FromLong(_pg_event_is_init);
 }
 
@@ -175,8 +171,7 @@ pg_event_filter(void *_, SDL_Event *event)
      */
     Uint32 type = event->type;
 
-    if (event->user.code == USEROBJECT_CHECK1 &&
-        event->user.data1 == (void *)USEROBJECT_CHECK2) {
+    if (type == PGE_USEREVENT) {
         return 1;
     }
 
@@ -414,9 +409,9 @@ pgEvent_FillUserEvent(pgEventObject *e, SDL_Event *event)
     if (!userobj)
         return -1;
 
-    event->type = e->type;
+    event->type = PGE_USEREVENT;
     event->user.code = USEROBJECT_CHECK1;
-    event->user.data1 = (void *)USEROBJECT_CHECK2;
+    event->user.data1 = (void *)(e->type);
     event->user.data2 = userobj;
     return 0;
 }
@@ -662,8 +657,8 @@ dict_from_event(SDL_Event *event)
 #endif /* IS_SDLv2 */
 
     /*check if it is an event the user posted*/
-    if (event->user.code == USEROBJECT_CHECK1 &&
-        event->user.data1 == (void *)USEROBJECT_CHECK2) {
+    if (event->type == PGE_USEREVENT &&
+        event->user.code == USEROBJECT_CHECK1) {
         dict = _pg_user_pg_event_getobject((UserEventObject *)event->user.data2);
         if (dict)
             return dict;
@@ -1234,7 +1229,12 @@ pgEvent_New(SDL_Event *event)
         return NULL;
 
     if (event) {
-        e->type = event->type;
+        if(event->type == PGE_USEREVENT &&
+           event->user.code == USEROBJECT_CHECK1){
+            e->type = event->user.data1;
+        } else {
+            e->type = event->type;
+        }
         e->dict = dict_from_event(event);
     }
     else {
@@ -1971,13 +1971,17 @@ pg_event_post(PyObject *self, PyObject *args)
         } break;
 
         default:
-            /* HACK:
-               A non-USEREVENT type (e->type >= PGE_USEREVENT) is treated like
+            if (e->type >= PGE_USEREVENT){
+                if (pgEvent_FillUserEvent(e, &event))
+                    return RAISE(pgExc_SDLError, "error creating event object");
+            } else {
+            /* A non-USEREVENT type (e->type >= PGE_USEREVENT) is treated like
                a USEREVENT union in the SDL2 event queue. This needs to be
                decoded again.
             */
-            if (pgEvent_FillUserEvent(e, &event))
-                return RAISE(pgExc_SDLError, "error creating event object");
+                if (pgEvent_FillUserEvent(e, &event))
+                    return RAISE(pgExc_SDLError, "error creating event object");
+            }
     }
 
 #if IS_SDLv1
