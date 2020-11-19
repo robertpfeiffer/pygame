@@ -64,6 +64,8 @@ static UserEventObject *user_event_objects = NULL;
 
 // Map joystick instance IDs to device ids for partial backwards compatibility
 static PyObject *joy_instance_map = NULL;
+static int SDLCALL
+pg_event_filter(void *_, SDL_Event *event);
 
 #if IS_SDLv2
 static int pg_key_repeat_delay = 0;
@@ -122,6 +124,7 @@ pgEvent_AutoInit(PyObject *self, PyObject *args)
 #endif /* IS_SLDv2 */
         pg_RegisterQuit(_pg_event_cleanup);
         _pg_event_is_init = 1;
+        SDL_SetEventFilter(pg_event_filter, NULL);
     }
 
     return PyInt_FromLong(_pg_event_is_init);
@@ -200,7 +203,7 @@ pg_event_filter(void *_, SDL_Event *event)
                 {
                     SDL_Event newevent = *event;
                     newevent.type = SDL_VIDEOEXPOSE;
-                    
+
                     SDL_FilterEvents(_pg_remove_pending_PGS_VIDEOEXPOSE, &newevent);
                     SDL_PushEvent(&newevent);
                     return 1;
@@ -214,7 +217,7 @@ pg_event_filter(void *_, SDL_Event *event)
                 {
                     SDL_Event newevent = *event;
                     newevent.type = SDL_ACTIVEEVENT;
-                    
+
                     SDL_PushEvent(&newevent);
                     return 1;
                 }
@@ -281,32 +284,32 @@ pg_event_filter(void *_, SDL_Event *event)
             return 1;
         }
         SDL_GetMouseState(&x, &y);
-        
+
         // Generate a MouseButtonDown event and MouseButtonUp for compatibility.
         // https://wiki.libsdl.org/SDL_MouseWheelEvent
         newdownevent.type = SDL_MOUSEBUTTONDOWN;
         newdownevent.button.x = x;
         newdownevent.button.y = y;
-        
+
         newupevent.type = SDL_MOUSEBUTTONUP;
         newupevent.button.x = x;
         newupevent.button.y = y;
 
         newdownevent.button.state = SDL_PRESSED;
         newdownevent.button.clicks = 1;
-        
+
         newupevent.button.state = SDL_RELEASED;
         newupevent.button.clicks = 1;
 
         if (event->wheel.y > 0) {
-            newdownevent.button.button =  PGM_BUTTON_WHEELUP | PGM_BUTTON_KEEP;    
+            newdownevent.button.button =  PGM_BUTTON_WHEELUP | PGM_BUTTON_KEEP;
             newupevent.button.button = PGM_BUTTON_WHEELUP | PGM_BUTTON_KEEP;
         }
         else {
-            newdownevent.button.button =  PGM_BUTTON_WHEELDOWN | PGM_BUTTON_KEEP;    
+            newdownevent.button.button =  PGM_BUTTON_WHEELDOWN | PGM_BUTTON_KEEP;
             newupevent.button.button = PGM_BUTTON_WHEELDOWN | PGM_BUTTON_KEEP;
         }
-        
+
         /* this doesn't work! This is called by SDL, not Python:
           if (SDL_PushEvent(&newdownevent) < 0)
             return RAISE(pgExc_SDLError, SDL_GetError()), 0;
@@ -1373,7 +1376,7 @@ pg_event_wait(PyObject *self, PyObject *args, PyObject *kwargs)
     };
 
     VIDEO_INIT_CHECK();
-    
+
     if(!PyArg_ParseTupleAndKeywords(args, kwargs, "|i", kwids, &timeout)) {
         return NULL;
     }
@@ -1865,7 +1868,7 @@ pg_event_post(PyObject *self, PyObject *args)
 {
     pgEventObject *e;
     SDL_Event event;
-    
+
     PyObject *event_key = NULL;
     PyObject *event_scancode = NULL;
     PyObject *event_mod = NULL;
@@ -1881,7 +1884,7 @@ pg_event_post(PyObject *self, PyObject *args)
         /* event is blocked, so we do not post it. */
         Py_RETURN_NONE;
     }
-    
+
     /* Handle quit event expicitly */
     if (e->type == SDL_QUIT) {
         event.type = SDL_QUIT;
@@ -1904,13 +1907,13 @@ pg_event_post(PyObject *self, PyObject *args)
         if (!PyInt_Check(event_key)){
             return RAISE(pgExc_SDLError, "posted event keycode must be int");
         }
-        
+
         // This block is where the magic hopefully happens
         event.key.state = (e->type == SDL_KEYDOWN) ? SDL_PRESSED : SDL_RELEASED;
 #if IS_SDLv2
         event.key.repeat = 0;
 #endif
-        
+
         event.key.keysym.sym = PyLong_AsLong(event_key);
 
         if (event_scancode != NULL && event_scancode != Py_None) {
@@ -2215,7 +2218,6 @@ MODINIT_DEFINE(event)
         have_registered_events = 1;
     }
 
-    SDL_SetEventFilter(pg_event_filter, NULL);
 #endif /* IS_SDLv2 */
 
     /* export the c api */
