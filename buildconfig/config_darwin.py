@@ -1,8 +1,10 @@
 """Config on Darwin w/ frameworks"""
 
 import os
-from distutils.sysconfig import get_python_inc
+import shutil, subprocess, plistlib
 
+from distutils.sysconfig import get_python_inc
+from setuptools._vendor.packaging.version import parse as parse_ver
 
 try:
     from config_unix import DependencyProg
@@ -54,53 +56,37 @@ class Dependency:
             print (self.name + '        '[len(self.name):] + ': not found')
 
 class FrameworkDependency(Dependency):
+    def __init__(self, *args, minver=None, identifier=""):
+        super().__init__(*args)
+        self.minver=minver
+
     def configure(self, incdirs, libdirs):
         BASE_DIRS = '/', os.path.expanduser('~/'), '/System/'
         for n in BASE_DIRS:
-            n += 'Library/Frameworks/'
-            fmwk = n + self.libs + '.framework/Versions/Current/'
+            framework_dir= os.path.join(n, 'Library/Frameworks/')
+            fmwk = os.path.join(framework_dir, self.libs + '.framework/Versions/Current/')
+            info_plist_path=os.path.join(fmwk, "Resources/Info.plist")
+            info_plist= plistlib.load(open(info_plistlib_path))
+            framework_ver = info_plist["CFBundleVersion"]
+            framework_name = info_plist["CFBundleName"]
+            print(f"Found {framework_name} version {framework_ver} in {framework_dir}")
+            if self.minver and parse_ver(framework_ver) < parse_ver(self.minver):
+                continue
+
             if os.path.isfile(fmwk + self.libs):
                 print ('Framework ' + self.libs + ' found')
                 self.found = 1
-                self.inc_dir = fmwk + 'Headers'
+                # If we use frameworks, don't need to specify include paths twice
+                self.inc_dir = ''
                 self.cflags = (
                     '-Xlinker "-framework" -Xlinker "' + self.libs + '"' +
-                    ' -Xlinker "-F' + n + '"')
+
+                    #not a linker flag, but a framework include path
+                    '"-F' + n + '"')
                 self.origlib = self.libs
                 self.libs = ''
                 return
-        print ('Framework ' + self.libs + ' not found')
-
-
-class DependencyPython:
-    def __init__(self, name, module, header):
-        self.name = name
-        self.lib_dir = ''
-        self.inc_dir = ''
-        self.libs = []
-        self.cflags = ''
-        self.found = 0
-        self.ver = '0'
-        self.module = module
-        self.header = header
-
-    def configure(self, incdirs, libdirs):
-        self.found = 1
-        if self.module:
-            try:
-                self.ver = __import__(self.module).__version__
-            except ImportError:
-                self.found = 0
-        if self.found and self.header:
-            fullpath = os.path.join(get_python_inc(0), self.header)
-            if not os.path.isfile(fullpath):
-                self.found = 0
-            else:
-                self.inc_dir = os.path.split(fullpath)[0]
-        if self.found:
-            print (self.name + '        '[len(self.name):] + ': found', self.ver)
-        else:
-            print (self.name + '        '[len(self.name):] + ': not found')
+            print ('Framework ' + self.libs + ' not found')
 
 def find_freetype():
     """ modern freetype uses pkg-config. However, some older systems don't have that.
@@ -128,10 +114,15 @@ def main(sdl2=False):
 
     if sdl2:
         DEPS = [
-            [DependencyProg('SDL', 'SDL_CONFIG', 'sdl2-config', '2.0', ['sdl'])],
-            [Dependency('FONT', ['SDL_ttf.h', 'SDL2/SDL_ttf.h'], 'libSDL2_ttf', ['SDL2_ttf'])],
-            [Dependency('IMAGE', ['SDL_image.h', 'SDL2/SDL_image.h'], 'libSDL2_image', ['SDL2_image'])],
-            [Dependency('MIXER', ['SDL_mixer.h', 'SDL2/SDL_mixer.h'], 'libSDL2_mixer', ['SDL2_mixer'])],
+            # minimum SDL2 version that supports M1 is 2.0.14
+            [DependencyProg('SDL', 'SDL_CONFIG', 'sdl2-config', '2.0.14', ['sdl']),
+             FrameworkDependency('SDL', 'SDL.h', 'libSDL2', 'SDL2')],
+            [Dependency('FONT', ['SDL_ttf.h', 'SDL2/SDL_ttf.h'], 'libSDL2_ttf', ['SDL2_ttf']),
+             FrameworkDependency('FONT', 'SDL_ttf.h', 'libSDL2_ttf', 'SDL2_ttf')],
+            [Dependency('IMAGE', ['SDL_image.h', 'SDL2/SDL_image.h'], 'libSDL2_image', ['SDL2_image']),
+             FrameworkDependency('IMAGE', 'SDL_image.h', 'libSDL2_image', 'SDL2_image')],
+            [Dependency('MIXER', ['SDL_mixer.h', 'SDL2/SDL_mixer.h'], 'libSDL2_mixer', ['SDL2_mixer']),
+             FrameworkDependency('MIXER', 'SDL_mixer.h', 'libSDL_mixer', 'SDL_mixer')],
         ]
     else:
         DEPS = [

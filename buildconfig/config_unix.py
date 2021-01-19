@@ -4,7 +4,9 @@ import os, sys
 from glob import glob
 import platform
 import logging
+import shutil, subprocess
 from distutils.sysconfig import get_python_inc
+from setuptools._vendor.packaging.version import parse as parse_ver
 
 configcommand = os.environ.get('SDL_CONFIG', 'sdl-config',)
 configcommand = configcommand + ' --version --cflags --libs'
@@ -23,21 +25,43 @@ class DependencyProg:
         self.inc_dir = ''
         self.libs = []
         self.cflags = ''
+
+        if " " in command:
+            command, *command_args = command.split()
+        else:
+            command_args=[]
+        
+        command_path=shutil.which(command)
+        
+        if not command_path:
+            print ('WARNING: "%s" not found!' % command)
+            self.found = 0
+            self.ver = '0'
+            self.libs = defaultlibs
+            return
+        
         try:
             # freetype-config for freetype2 version 2.3.7 on Debian lenny
             # does not recognize multiple command line options. So execute
             # 'command' separately for each option.
-            config = (os.popen(command + ' ' + version_flag).readlines() +
-                      os.popen(command + ' --cflags').readlines() +
-                      os.popen(command + ' --libs').readlines())
-            flags = ' '.join(config[1:]).split()
+            
+            version = subprocess.run([command_path, *command_args]+[version_flag], check=True, capture_output=True, text=True).stdout
+            flags = subprocess.run([command_path, *command_args]+["--cflags"], check=True, capture_output=True, text=True).stdout.split()
+            libs = subprocess.run([command_path, *command_args]+["--libs"], check=True, capture_output=True, text=True).stdout
 
+            try:
+                prefix = subprocess.run([command_path, *command_args]+["--prefix"], check=True, capture_output=True, text=True).stdout
+                print(prefix)
+            except:
+                pass
+            
             # remove this GNU_SOURCE if there... since python has it already,
             #   it causes a warning.
             if '-D_GNU_SOURCE=1' in flags:
                 flags.remove('-D_GNU_SOURCE=1')
-            self.ver = config[0].strip()
-            if minver and self.ver < minver:
+                
+            self.ver = version.strip()
+            if minver and parse_ver(self.ver) < parse_ver(minver):
                 err= 'WARNING: requires %s version %s (%s found)' % (self.name, self.ver, minver)
                 raise ValueError(err)
             self.found = 1
@@ -50,8 +74,9 @@ class DependencyProg:
             if self.name == 'SDL':
                 inc = '-I' + '/usr/X11R6/include'
                 self.cflags = inc + ' ' + self.cflags
-        except (ValueError, TypeError):
+        except (ValueError, TypeError) as e:
             print ('WARNING: "%s" failed!' % command)
+            print(e)
             self.found = 0
             self.ver = '0'
             self.libs = defaultlibs
@@ -96,37 +121,6 @@ class Dependency:
         else:
             print (self.name + '        '[len(self.name):] + ': not found')
             print(self.name, self.checkhead, self.checklib, incdirs, libdirs)
-
-
-class DependencyPython:
-    def __init__(self, name, module, header):
-        self.name = name
-        self.lib_dir = ''
-        self.inc_dir = ''
-        self.libs = []
-        self.cflags = ''
-        self.found = 0
-        self.ver = '0'
-        self.module = module
-        self.header = header
-
-    def configure(self, incdirs, libdirs):
-        self.found = 1
-        if self.module:
-            try:
-                self.ver = __import__(self.module).__version__
-            except ImportError:
-                self.found = 0
-        if self.found and self.header:
-            fullpath = os.path.join(get_python_inc(0), self.header)
-            if not os.path.isfile(fullpath):
-                self.found = 0
-            else:
-                self.inc_dir = os.path.split(fullpath)[0]
-        if self.found:
-            print (self.name + '        '[len(self.name):] + ': found', self.ver)
-        else:
-            print (self.name + '        '[len(self.name):] + ': not found')
 
 sdl_lib_name = 'SDL'
 
